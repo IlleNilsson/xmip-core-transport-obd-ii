@@ -150,29 +150,16 @@ impl Loopback for ObdTransport {
 mod tests {
     use super::*;
     use std::time::Instant;
+    use transport::payload::{edge_payloads, patterned};
 
     use crate::{Ecu, Pid};
-
-    /// `len` bytes that a truncation, a reorder or a duplicate would change.
-    fn patterned(len: usize) -> Vec<u8> {
-        (0..len)
-            .map(|at| u8::try_from((at * 31 + at / 251) % 256).unwrap_or(0))
-            .collect()
-    }
 
     #[test]
     fn the_loopback_returns_the_edge_payloads_whole_and_refuses_over_the_brim() {
         let loopback = ObdTransport::loopback();
         let brim = loopback.pid.ceiling();
-        let edges: [(&str, Vec<u8>); 7] = [
-            ("empty", Vec::new()),
-            ("one byte", vec![0x2a]),
-            ("every byte", (0..=255).collect()),
-            ("nul run", vec![0; 512]),
-            ("high bytes", vec![0xff; 512]),
-            ("crlf storm", b"\r\n".repeat(400)),
-            ("the brim", patterned(brim)),
-        ];
+        let mut edges = edge_payloads();
+        edges.push(("the brim", patterned(brim)));
         for (name, bytes) in edges {
             let arrived = loopback
                 .round(&bytes)
