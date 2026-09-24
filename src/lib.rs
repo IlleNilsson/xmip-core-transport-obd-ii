@@ -27,7 +27,10 @@ pub mod pid;
 use std::sync::Arc;
 
 use iso_tp::IsoTpTransport;
+use iso_tp::loopback::Session;
+use transport::ceiling;
 use transport::error::{Result, protocol_error};
+use transport::standing::Standing;
 use transport::{Arrived, Directions, Transport};
 
 pub use ecu::Ecu;
@@ -45,7 +48,7 @@ pub struct ObdTransport {
     link: IsoTpTransport,
     pid: Pid,
     ecu: Arc<Ecu>,
-    standing: loopback::Standing,
+    standing: Standing<Session>,
 }
 
 impl ObdTransport {
@@ -57,7 +60,7 @@ impl ObdTransport {
             link,
             pid: DEFAULT_PID,
             ecu: Arc::new(Ecu::new()),
-            standing: loopback::Standing::default(),
+            standing: Standing::default(),
         }
     }
 
@@ -154,13 +157,7 @@ impl Transport for ObdTransport {
     /// `target` may name the parameter.
     fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
         let pid = self.addressed(target)?;
-        if bytes.len() > pid.ceiling() {
-            return Err(protocol_error(format!(
-                "{} bytes is over the OBD-II ceiling of {}",
-                bytes.len(),
-                pid.ceiling()
-            )));
-        }
+        ceiling::within(bytes.len(), pid.ceiling(), "one OBD-II response carries")?;
         self.ecu.set(pid, bytes);
         self.answer_one()
     }
@@ -222,7 +219,7 @@ mod tests {
         let error = ecu
             .send("obd://can0/0x09/0x0a", &[0; 4093])
             .expect_err("over");
-        assert!(error.message.contains("ceiling"), "{error}");
+        assert!(error.message.contains("is over the 4092"), "{error}");
     }
 
     #[test]

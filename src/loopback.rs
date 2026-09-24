@@ -8,47 +8,17 @@
 //! payload. The two ends need two threads, so the capability's `round`
 //! drives it.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use can_bus::Bus;
 use iso_tp::IsoTpTransport;
+use iso_tp::loopback::Session;
 use sdk::broadcast::Medium;
-use transport::Arrived;
-use transport::error::{Result, protocol_error};
+use transport::error::Result;
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 
 use crate::pid::{ECU, FUNCTIONAL, code};
 use crate::{ObdTransport, Transport};
-
-/// One loopback session: the tester and the ECU, each a node on one simulated
-/// bus, hearing what the other transmits. Until 2026-09-24 a session was two
-/// directed queues, because the in-process bus returned a node's own frames.
-#[derive(Clone)]
-pub(crate) struct Session {
-    tester: Arc<dyn Bus>,
-    ecu: Arc<dyn Bus>,
-}
-
-impl Session {
-    /// A fresh bus with a tester and an ECU on it.
-    fn fresh() -> Self {
-        let medium = Medium::new("loopback");
-        Self {
-            tester: Arc::new(medium.node()),
-            ecu: Arc::new(medium.node()),
-        }
-    }
-}
-
-/// The sessions a loopback has stood up and not yet taken, by address. A
-/// fresh bus per round, so rounds driven at once from several
-/// threads never read each other's frames.
-pub(crate) type Standing = Arc<Mutex<HashMap<String, Session>>>;
-
-/// Numbers the sessions, so each address names one.
-static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 
 impl ObdTransport {
     /// Both ends on this machine: an ECU whose far end is a tester, the
@@ -65,44 +35,15 @@ impl ObdTransport {
 
     /// The ECU's end of the session at `address`.
     fn ecu_end(&self, address: &str) -> Result<Self> {
-        let session = self
-            .standing
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(address)
-            .cloned()
-            .ok_or_else(|| protocol_error(format!("{address} is not a session stood up here")))?;
+        let session = self.standing.session(address)?;
         let link = IsoTpTransport::new(Arc::clone(&session.ecu), session.ecu, ECU)
             .timing_out_after(LOOPBACK_TIMEOUT);
         Ok(Self {
             link,
             pid: self.pid,
             ecu: Arc::clone(&self.ecu),
-            standing: Arc::clone(&self.standing),
+            standing: self.standing.clone(),
         })
-    }
-}
-
-/// A tester waiting to poll its one parameter. It owns the session: the
-/// address is forgotten once the data is taken.
-struct Polling {
-    end: ObdTransport,
-    address: String,
-}
-
-impl FarEnd for Polling {
-    fn address(&self) -> &str {
-        &self.address
-    }
-
-    fn take_one(self: Box<Self>) -> Result<Arrived> {
-        let taken = self.end.poll(self.end.pid);
-        self.end
-            .standing
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&self.address);
-        taken
     }
 }
 
@@ -113,6 +54,8 @@ impl Loopback for ObdTransport {
         Some(self.pid.ceiling())
     }
 
+    /// A tester waiting to poll its one parameter. It owns the session:
+    /// the address is forgotten once the data is taken.
     fn far_end(&self) -> Result<Box<dyn FarEnd>> {
         let session = Session::fresh();
         let link = IsoTpTransport::new(
@@ -121,23 +64,14 @@ impl Loopback for ObdTransport {
             FUNCTIONAL,
         )
         .timing_out_after(LOOPBACK_TIMEOUT);
-        let address = format!(
-            "obd://loopback/{}",
-            NEXT_SESSION.fetch_add(1, Ordering::Relaxed)
-        );
-        self.standing
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(address.clone(), session);
-        Ok(Box::new(Polling {
-            end: Self {
-                link,
-                pid: self.pid,
-                ecu: Arc::clone(&self.ecu),
-                standing: Arc::clone(&self.standing),
-            },
-            address,
-        }))
+        let end = Self {
+            link,
+            pid: self.pid,
+            ecu: Arc::clone(&self.ecu),
+            standing: self.standing.clone(),
+        };
+        let address = self.standing.stand("obd", session);
+        Ok(self.standing.far_end(address, move || end.poll(end.pid)))
     }
 
     /// The ECU answers the tester's one request with `payload`.
@@ -188,10 +122,7 @@ mod tests {
             started.elapsed() < LOOPBACK_TIMEOUT,
             "a refused send is judged, never waited on"
         );
-        assert!(
-            loopback.standing.lock().expect("lock").is_empty(),
-            "a taken session is forgotten"
-        );
+        assert!(loopback.standing.is_empty(), "a taken session is forgotten");
     }
 
     #[test]
