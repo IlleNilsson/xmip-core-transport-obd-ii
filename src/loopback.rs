@@ -1,8 +1,8 @@
 //! Both ends of one OBD-II exchange on this machine (ADR-0051).
 //!
-//! A tester and an ECU on a fresh pair of directed loopback buses per
-//! round, each end an ISO-TP session of its own: the tester's request
-//! crosses one bus, the ECU's answer comes back on the other. The far end
+//! A tester and an ECU, two nodes on a fresh simulated bus per round,
+//! each end an ISO-TP session of its own: the tester's request
+//! reaches the ECU, and its answer comes back. The far end
 //! is the tester, polling the parameter and taking the data as the
 //! Stream; the near end is the ECU, answering the one request with the
 //! payload. The two ends need two threads, so the capability's `round`
@@ -12,8 +12,9 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use can_bus::{Bus, Loopback as LoopbackBus};
+use can_bus::Bus;
 use iso_tp::IsoTpTransport;
+use sdk::broadcast::Medium;
 use transport::Arrived;
 use transport::error::{Result, protocol_error};
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
@@ -21,16 +22,28 @@ use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 use crate::pid::{ECU, FUNCTIONAL, code};
 use crate::{ObdTransport, Transport};
 
-/// The two directed buses of one loopback session: the tester transmits on
-/// `to_ecu` and reads `to_tester`, the ECU the other way round.
+/// One loopback session: the tester and the ECU, each a node on one simulated
+/// bus, hearing what the other transmits. Until 2026-09-24 a session was two
+/// directed queues, because the in-process bus returned a node's own frames.
 #[derive(Clone)]
 pub(crate) struct Session {
-    to_ecu: Arc<dyn Bus>,
-    to_tester: Arc<dyn Bus>,
+    tester: Arc<dyn Bus>,
+    ecu: Arc<dyn Bus>,
+}
+
+impl Session {
+    /// A fresh bus with a tester and an ECU on it.
+    fn fresh() -> Self {
+        let medium = Medium::new("loopback");
+        Self {
+            tester: Arc::new(medium.node()),
+            ecu: Arc::new(medium.node()),
+        }
+    }
 }
 
 /// The sessions a loopback has stood up and not yet taken, by address. A
-/// fresh pair of buses per round, so rounds driven at once from several
+/// fresh bus per round, so rounds driven at once from several
 /// threads never read each other's frames.
 pub(crate) type Standing = Arc<Mutex<HashMap<String, Session>>>;
 
@@ -39,12 +52,12 @@ static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 
 impl ObdTransport {
     /// Both ends on this machine: an ECU whose far end is a tester, the
-    /// two on a fresh pair of directed loopback buses per round, the
+    /// two nodes on a fresh simulated bus per round, the
     /// loopback timeout on both. The link this instance itself holds
     /// carries nothing; every round stands up its own.
     #[must_use]
     pub fn loopback() -> Self {
-        let idle: Arc<dyn Bus> = Arc::new(LoopbackBus::new());
+        let idle: Arc<dyn Bus> = Arc::new(Medium::new("loopback").node());
         let link =
             IsoTpTransport::new(Arc::clone(&idle), idle, ECU).timing_out_after(LOOPBACK_TIMEOUT);
         Self::new(link)
@@ -59,7 +72,7 @@ impl ObdTransport {
             .get(address)
             .cloned()
             .ok_or_else(|| protocol_error(format!("{address} is not a session stood up here")))?;
-        let link = IsoTpTransport::new(session.to_tester, session.to_ecu, ECU)
+        let link = IsoTpTransport::new(Arc::clone(&session.ecu), session.ecu, ECU)
             .timing_out_after(LOOPBACK_TIMEOUT);
         Ok(Self {
             link,
@@ -101,13 +114,10 @@ impl Loopback for ObdTransport {
     }
 
     fn far_end(&self) -> Result<Box<dyn FarEnd>> {
-        let session = Session {
-            to_ecu: Arc::new(LoopbackBus::new()),
-            to_tester: Arc::new(LoopbackBus::new()),
-        };
+        let session = Session::fresh();
         let link = IsoTpTransport::new(
-            Arc::clone(&session.to_ecu),
-            Arc::clone(&session.to_tester),
+            Arc::clone(&session.tester),
+            Arc::clone(&session.tester),
             FUNCTIONAL,
         )
         .timing_out_after(LOOPBACK_TIMEOUT);
