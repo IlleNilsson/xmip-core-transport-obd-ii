@@ -10,6 +10,7 @@
 //! shape. One ISO-TP message carries it all, so a parameter's data is at
 //! most the message's ceiling less that header.
 
+use transport::ceiling;
 use transport::error::{Result, protocol_error};
 
 /// Mode 01: current data.
@@ -108,13 +109,7 @@ impl Pid {
     /// # Errors
     /// Data over [`Self::ceiling`].
     pub fn response(self, data: &[u8]) -> Result<Vec<u8>> {
-        if data.len() > self.ceiling() {
-            return Err(protocol_error(format!(
-                "{} bytes is over the OBD-II ceiling of {}",
-                data.len(),
-                self.ceiling()
-            )));
-        }
+        ceiling::within(data.len(), self.ceiling(), "one OBD-II response carries")?;
         let mut out = Vec::with_capacity(self.header() + data.len());
         out.push(self.mode | POSITIVE);
         out.push(self.pid);
