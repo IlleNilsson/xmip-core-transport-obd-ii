@@ -11,8 +11,8 @@
 use std::sync::Arc;
 
 use can_bus::Bus;
+use can_bus::loopback::Session;
 use iso_tp::IsoTpTransport;
-use iso_tp::loopback::Session;
 use sdk::broadcast::Medium;
 use transport::error::Result;
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
@@ -36,7 +36,7 @@ impl ObdTransport {
     /// The ECU's end of the session at `address`.
     fn ecu_end(&self, address: &str) -> Result<Self> {
         let session = self.standing.session(address)?;
-        let link = IsoTpTransport::new(Arc::clone(&session.ecu), session.ecu, ECU)
+        let link = IsoTpTransport::new(Arc::clone(&session.near), session.near, ECU)
             .timing_out_after(LOOPBACK_TIMEOUT);
         Ok(Self {
             link,
@@ -59,8 +59,8 @@ impl Loopback for ObdTransport {
     fn far_end(&self) -> Result<Box<dyn FarEnd>> {
         let session = Session::fresh();
         let link = IsoTpTransport::new(
-            Arc::clone(&session.tester),
-            Arc::clone(&session.tester),
+            Arc::clone(&session.far),
+            Arc::clone(&session.far),
             FUNCTIONAL,
         )
         .timing_out_after(LOOPBACK_TIMEOUT);
