@@ -31,7 +31,8 @@ use iso_tp::IsoTpTransport;
 use transport::ceiling;
 use transport::error::{Result, protocol_error};
 use transport::standing::Standing;
-use transport::{Arrived, Directions, Transport};
+use transport::{Arrived, Configured, Directions, Transport};
+use xcore::settings::{Applies, Fixed, Kind, Presence, Read, Setting, Settings};
 
 pub use ecu::Ecu;
 pub use pid::{CURRENT_DATA, ECU, FUNCTIONAL, Pid, VEHICLE_INFORMATION, code};
@@ -163,6 +164,87 @@ impl Transport for ObdTransport {
     }
 }
 
+/// A byte of a parameter: its mode or its number.
+const BYTE: Kind = Kind::Integer {
+    minimum: 0,
+    maximum: 255,
+};
+
+/// A CAN identifier, extended above `0x7ff`.
+const CAN_ID: Kind = Kind::Integer {
+    minimum: 0,
+    maximum: 0x1fff_ffff,
+};
+
+impl Configured for ObdTransport {
+    /// The address is the CAN interface, `can0`, the ISO-TP link rides. A
+    /// Receive Location is the tester and transmits at the functional
+    /// address; a Send Location is the ECU and answers from its own.
+    const SETTINGS: &'static Settings = &Settings {
+        technology: env!("CARGO_PKG_NAME"),
+        settings: &[
+            Setting {
+                name: "mode",
+                kind: BYTE,
+                presence: Presence::Default(Fixed::Integer(DEFAULT_PID.mode as i64)),
+                meaning: "The mode of the parameter polled or answered: 1 current data, 9 \
+                          vehicle information.",
+                applies: Applies::Both,
+            },
+            Setting {
+                name: "pid",
+                kind: BYTE,
+                presence: Presence::Default(Fixed::Integer(DEFAULT_PID.pid as i64)),
+                meaning: "The number of the parameter polled or answered within its mode.",
+                applies: Applies::Both,
+            },
+            Setting {
+                name: "request_id",
+                kind: CAN_ID,
+                presence: Presence::Default(Fixed::Integer(FUNCTIONAL as i64)),
+                meaning: "The CAN identifier a tester asks under.",
+                applies: Applies::Receive,
+            },
+            Setting {
+                name: "response_id",
+                kind: CAN_ID,
+                presence: Presence::Default(Fixed::Integer(ECU as i64)),
+                meaning: "The CAN identifier an ECU answers from.",
+                applies: Applies::Send,
+            },
+            Setting {
+                name: "timeout",
+                kind: Kind::Duration,
+                presence: Presence::Optional,
+                meaning: "How long a peer that stops mid-message is waited on; the ISO-TP \
+                          link's own when left out.",
+                applies: Applies::Both,
+            },
+        ],
+    };
+
+    /// On a Location read for both sides, the tester's identifier is the
+    /// one transmitted under.
+    fn configured(address: &str, settings: &Read) -> Result<Self> {
+        // The declaration holds every integer within its range.
+        let byte = |name| u8::try_from(settings.integer(name)).unwrap_or_default();
+        let id = settings
+            .optional_integer("request_id")
+            .or_else(|| settings.optional_integer("response_id"))
+            .map_or(ECU, |id| u32::try_from(id).unwrap_or_default());
+        let bus = can_bus::open_bus(address)?;
+        let link = IsoTpTransport::new(Arc::clone(&bus), bus, id);
+        let link = match settings.optional_duration("timeout") {
+            Some(timeout) => link.timing_out_after(timeout),
+            None => link,
+        };
+        Ok(Self::new(link).at(Pid {
+            mode: byte("mode"),
+            pid: byte("pid"),
+        }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,6 +262,30 @@ mod tests {
             .timing_out_after(quick);
         let ecu = IsoTpTransport::new(Arc::clone(&at_ecu), at_ecu, ECU).timing_out_after(quick);
         (ObdTransport::new(tester), ObdTransport::new(ecu))
+    }
+
+    #[test]
+    fn obd_ii_declares_its_settings_and_reads_through_them() {
+        use xcore::settings::Given;
+        assert_eq!(ObdTransport::SETTINGS.problems(), Vec::<String>::new());
+        let given = [
+            ("mode".to_string(), Given::Integer(1)),
+            ("pid".to_string(), Given::Integer(0x0c)),
+            ("timeout".to_string(), Given::Text("250ms".to_string())),
+        ];
+        let tester = ObdTransport::open("vcan0", Applies::Receive, &given).expect("built");
+        assert_eq!(tester.pid, Pid::current(0x0c));
+        let ecu = ObdTransport::open("vcan0", Applies::Send, &[]).expect("built");
+        assert_eq!(ecu.pid, DEFAULT_PID);
+        let wrong = [("request_id".to_string(), Given::Integer(0x7df))];
+        let Err(refused) = ObdTransport::open("vcan0", Applies::Send, &wrong) else {
+            panic!("request_id is the tester's");
+        };
+        assert!(
+            refused.message.contains("\"request_id\""),
+            "{}",
+            refused.message
+        );
     }
 
     #[test]
