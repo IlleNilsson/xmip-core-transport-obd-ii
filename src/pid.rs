@@ -10,7 +10,7 @@
 //! shape. One ISO-TP message carries it all, so a parameter's data is at
 //! most the message's ceiling less that header.
 
-use transport::ceiling;
+use net::ceiling;
 use transport::error::{Result, protocol_error};
 
 /// Mode 01: current data.
