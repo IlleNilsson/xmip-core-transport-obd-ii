@@ -27,8 +27,9 @@ pub mod pid;
 use std::sync::Arc;
 
 use can_bus::loopback::Session;
+use codec::hex::prefixed_number;
 use iso_tp::IsoTpTransport;
-use transport::ceiling;
+use net::{Target, ceiling};
 use transport::error::{Result, protocol_error};
 use transport::standing::Standing;
 use transport::{Arrived, Configured, Directions, Transport};
@@ -40,7 +41,7 @@ pub use pid::{CURRENT_DATA, ECU, FUNCTIONAL, Pid, VEHICLE_INFORMATION, code};
 /// The parameter a Location polls or answers unless told otherwise: the
 /// ECU name, information type `0a`, the one vehicle information item a
 /// manufacturer fills freely.
-pub const DEFAULT_PID: Pid = Pid::information(0x0a);
+const DEFAULT_PID: Pid = Pid::information(0x0a);
 
 /// One end of a diagnostic exchange: a tester when it receives, an ECU
 /// when it sends.
@@ -94,7 +95,10 @@ impl ObdTransport {
         self.link.deliver(&pid.request())?;
         let answer = self.link.collect()?;
         let data = pid.parse_response(&answer.bytes)?;
-        Ok(Arrived::new(pid.origin(&bus_of(&answer.origin_uri)), data))
+        Ok(Arrived::new(
+            pid.origin(iso_tp::bus_of(&answer.origin_uri)),
+            data,
+        ))
     }
 
     /// Answer one request as the ECU.
@@ -102,7 +106,7 @@ impl ObdTransport {
     /// # Errors
     /// A tester that never asks, a link that failed, or data no response
     /// carries.
-    pub fn answer_one(&self) -> Result<()> {
+    fn answer_one(&self) -> Result<()> {
         let request = self.link.collect()?;
         if request.bytes.is_empty() {
             return Err(protocol_error("the tester hung up"));
@@ -113,7 +117,9 @@ impl ObdTransport {
     /// `obd://<bus>/0x<mode>/0x<pid>`: what `target` overrides of this
     /// end's parameter.
     fn addressed(&self, target: &str) -> Result<Pid> {
-        let Some((_, path)) = transport::socket::target("obd", target) else {
+        let Some((_, path)) =
+            Target::under(&["obd"], target).map(|named| (named.authority(), named.path()))
+        else {
             return Ok(self.pid);
         };
         if path.is_empty() {
@@ -121,23 +127,10 @@ impl ObdTransport {
         }
         let (mode, pid) = path
             .split_once('/')
-            .and_then(|(mode, pid)| Some((hex(mode)?, hex(pid)?)))
+            .and_then(|(mode, pid)| Some((prefixed_number(mode).ok()?, prefixed_number(pid).ok()?)))
             .ok_or_else(|| protocol_error(format!("{path} is not a mode and a parameter")))?;
         Ok(Pid { mode, pid })
     }
-}
-
-fn hex(text: &str) -> Option<u8> {
-    u8::from_str_radix(text.strip_prefix("0x")?, 16).ok()
-}
-
-/// The bus an ISO-TP origin names.
-fn bus_of(origin: &str) -> String {
-    origin
-        .strip_prefix("isotp://")
-        .and_then(|rest| rest.split('/').next())
-        .unwrap_or("isotp")
-        .to_string()
 }
 
 impl Transport for ObdTransport {
@@ -344,6 +337,5 @@ mod tests {
         assert!(tester.claims().is_none());
         assert!(tester.directions().receives() && tester.directions().sends());
         assert_eq!(tester.at(Pid::current(0x05)).pid, Pid::current(0x05));
-        assert_eq!(bus_of("elsewhere"), "isotp");
     }
 }
