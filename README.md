@@ -6,6 +6,13 @@ A send target is read by `net::Target` in [xmip-core-library-net](https://github
 
 A `0x` number in a target is read by `codec::hex::prefixed_number` in [xmip-core-library-codec](https://github.com/IlleNilsson/xmip-core-library-codec), which refuses a sign; until 2026-09-28 it was read with `from_str_radix`, which took `0x+7e8`.
 
+## Acknowledgement
+
+A receive is a poll of one parameter, which consumes nothing at the ECU. Its
+verdict therefore has nothing to tell the ECU, whichever it is: a receive cycle
+that did not complete loses nothing, and the next poll asks again. The
+parameter's data arrives whole.
+
 ## Toolchain
 
 `rust-toolchain.toml` pins the toolchain for the whole estate. Do not change it
