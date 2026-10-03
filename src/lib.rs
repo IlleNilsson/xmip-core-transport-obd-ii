@@ -17,6 +17,10 @@
 //! process, the SDK's simulated one — so they round-trip with no hardware,
 //! which is what [`ObdTransport::loopback`] stands up (ADR-0051).
 //!
+//! **A receive is a poll, which consumes nothing at the ECU**, so its
+//! verdict has nothing to tell it, whichever it is: a cycle that did not
+//! complete loses nothing, and the next poll asks again.
+//!
 //! The origin URI names the parameter that was polled:
 //! `obd://<bus>/0x<mode>/0x<pid>`.
 
@@ -32,7 +36,7 @@ use iso_tp::IsoTpTransport;
 use net::{Target, ceiling};
 use transport::error::{Result, protocol_error};
 use transport::standing::Standing;
-use transport::{Arrived, Configured, Directions, Transport};
+use transport::{Acknowledgement, Arrived, Configured, Directions, Taken, Transport};
 use xcore::settings::{Applies, Fixed, Kind, Presence, Read, Setting, Settings};
 
 pub use ecu::Ecu;
@@ -86,16 +90,16 @@ impl ObdTransport {
         &self.ecu
     }
 
-    /// Ask the ECU for `pid` and take the data it answers with.
+    /// Ask the ECU for `pid` and take the data it answers with, whole.
     ///
     /// # Errors
     /// A negative response, an answer to another parameter, or a link that
     /// failed.
-    pub fn poll(&self, pid: Pid) -> Result<Arrived> {
+    pub fn poll(&self, pid: Pid) -> Result<Taken> {
         self.link.deliver(&pid.request())?;
         let answer = self.link.collect()?;
         let data = pid.parse_response(&answer.bytes)?;
-        Ok(Arrived::new(
+        Ok(Taken::new(
             pid.origin(iso_tp::bus_of(&answer.origin_uri)),
             data,
         ))
@@ -142,9 +146,21 @@ impl Transport for ObdTransport {
         Directions::BOTH
     }
 
-    /// Poll as the tester: one Stream per parameter.
+    fn arrivals(&self) -> transport::Arrivals {
+        transport::Arrivals::Ordered("a poll reads again what is not yet told")
+    }
+
+    /// Poll as the tester: one Stream per parameter, whole. The verdict has
+    /// nothing to tell the ECU, whichever it is: a poll consumes nothing, so
+    /// a cycle that did not complete loses nothing — the next poll asks
+    /// again.
     fn receive(&self) -> Result<Vec<Arrived>> {
-        Ok(vec![self.poll(self.pid)?])
+        let polled = self.poll(self.pid)?;
+        Ok(vec![Arrived::whole(
+            polled.origin_uri,
+            polled.bytes,
+            Acknowledgement::unconsumed(),
+        )])
     }
 
     /// Answer one request as the ECU, `bytes` being the parameter's data;
@@ -306,7 +322,10 @@ mod tests {
             .expect("asking");
         ecu.send("obd://can0/0x01/0x0c", &[0x1a, 0xf8])
             .expect("answering");
-        let arrived = tester.poll(Pid::current(0x0c)).expect("rpm");
+        let polling = tester.clone().at(Pid::current(0x0c));
+        let arrived = polling.receive().expect("rpm").remove(0);
+        assert!(arrived.defers(), "a poll consumes nothing: nothing to lose");
+        let arrived = arrived.taken().expect("taken");
         assert_eq!(arrived.bytes, [0x1a, 0xf8]);
         assert_eq!(arrived.origin_uri, "obd://loopback/0x01/0x0c");
         assert_eq!(
