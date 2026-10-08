@@ -14,6 +14,7 @@ use can_bus::Bus;
 use can_bus::loopback::Session;
 use iso_tp::IsoTpTransport;
 use sdk::broadcast::Medium;
+use transport::ArrivalIdentity;
 use transport::error::Result;
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 
@@ -48,6 +49,10 @@ impl ObdTransport {
 }
 
 impl Loopback for ObdTransport {
+    fn arrival_identity(&self) -> ArrivalIdentity {
+        ArrivalIdentity::Named(&[context::property::CAN_IDENTIFIER])
+    }
+
     /// The ISO-TP ceiling less the response header: the fact ISO 15765-4
     /// states about one message and SAE J1979 about its header.
     fn ceiling(&self) -> Option<usize> {
