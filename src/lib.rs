@@ -99,10 +99,9 @@ impl ObdTransport {
         self.link.deliver(&pid.request())?;
         let answer = self.link.collect()?;
         let data = pid.parse_response(&answer.bytes)?;
-        Ok(Taken::new(
-            pid.origin(iso_tp::bus_of(&answer.origin_uri)),
-            data,
-        ))
+        let mut polled = Taken::new(pid.origin(iso_tp::bus_of(&answer.origin_uri)), data);
+        polled.observed = answer.observed;
+        Ok(polled)
     }
 
     /// Answer one request as the ECU.
@@ -156,11 +155,15 @@ impl Transport for ObdTransport {
     /// again.
     fn receive(&self) -> Result<Vec<Arrived>> {
         let polled = self.poll(self.pid)?;
-        Ok(vec![Arrived::whole(
-            polled.origin_uri,
-            polled.bytes,
-            Acknowledgement::unconsumed(),
-        )])
+        Ok(vec![
+            Arrived::whole(
+                polled.origin_uri,
+                polled.bytes,
+                Acknowledgement::unconsumed(),
+            )
+            .scheduled()
+            .observing_all(polled.observed),
+        ])
     }
 
     /// Answer one request as the ECU, `bytes` being the parameter's data;
