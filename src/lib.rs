@@ -149,6 +149,10 @@ impl Transport for ObdTransport {
         transport::Arrivals::Ordered("a poll reads again what is not yet told")
     }
 
+    fn waiting(&self) -> transport::Waiting {
+        transport::Waiting::Polled("a poll asks the ECU once and returns its answer")
+    }
+
     /// Poll as the tester: one Stream per parameter, whole. The verdict has
     /// nothing to tell the ECU, whichever it is: a poll consumes nothing, so
     /// a cycle that did not complete loses nothing — the next poll asks
