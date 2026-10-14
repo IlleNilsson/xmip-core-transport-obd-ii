@@ -190,10 +190,9 @@ mod tests {
             b"WVWZZZ1JZXW000001"
         );
         assert_eq!(vin.response(&[]).expect("empty"), [0x49, 0x02, 0x01]);
-        assert!(
-            vin.parse_response(&[0x49, 0x02, 0x01])
-                .expect("empty")
-                .is_empty()
+        assert_eq!(
+            vin.parse_response(&[0x49, 0x02, 0x01]).expect("empty"),
+            [] as [u8; 0]
         );
         assert_eq!(vin.ceiling(), 4092);
         assert!(vin.response(&[0; 4093]).is_err(), "over the ceiling");
