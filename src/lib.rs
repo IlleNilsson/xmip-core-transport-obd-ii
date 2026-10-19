@@ -157,7 +157,7 @@ impl Transport for ObdTransport {
     /// nothing to tell the ECU, whichever it is: a poll consumes nothing, so
     /// a cycle that did not complete loses nothing — the next poll asks
     /// again.
-    fn receive(&self) -> Result<Vec<Arrived>> {
+    fn receive_up_to(&self, _most: usize) -> Result<Vec<Arrived>> {
         let polled = self.poll(self.pid)?;
         Ok(vec![
             Arrived::whole(
@@ -170,9 +170,14 @@ impl Transport for ObdTransport {
         ])
     }
 
+    fn sending(&self) -> transport::Sending {
+        transport::Sending::Gathered("one OBD-II request carries the whole body")
+    }
+
     /// Answer one request as the ECU, `bytes` being the parameter's data;
     /// `target` may name the parameter.
-    fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
+    fn send_from(&self, target: &str, outgoing: transport::Outgoing<'_>) -> Result<()> {
+        let bytes: &[u8] = &outgoing.gather()?;
         let pid = self.addressed(target)?;
         ceiling::within(bytes.len(), pid.ceiling(), "one OBD-II response carries")?;
         self.ecu.set(pid, bytes);
