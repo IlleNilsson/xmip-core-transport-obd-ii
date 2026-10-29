@@ -121,7 +121,7 @@ impl ObdTransport {
     /// end's parameter.
     fn addressed(&self, target: &str) -> Result<Pid> {
         let Some((_, path)) =
-            Target::under(&["obd"], target).map(|named| (named.authority(), named.path()))
+            Target::under(Self::SCHEMES, target).map(|named| (named.authority(), named.path()))
         else {
             return Ok(self.pid);
         };
@@ -243,6 +243,9 @@ impl Configured for ObdTransport {
             },
         ],
     };
+
+    /// The schemes a Location's address is entered with to choose this technology.
+    const SCHEMES: &'static [&'static str] = &["obd"];
 
     /// On a Location read for both sides, the tester's identifier is the
     /// one transmitted under.
