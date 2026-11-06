@@ -8,7 +8,8 @@
 //! Send Location answering as the ECU sets the parameter it answers.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
+use xcore::lock::Locked;
 
 use transport::error::Result;
 
@@ -36,20 +37,13 @@ impl Ecu {
 
     /// Answer `pid` with `data` from now on.
     pub fn set(&self, pid: Pid, data: &[u8]) {
-        self.answers
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(pid, data.to_vec());
+        self.answers.locked().insert(pid, data.to_vec());
     }
 
     /// What `pid` is answered with.
     #[must_use]
     pub fn held(&self, pid: Pid) -> Option<Vec<u8>> {
-        self.answers
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(&pid)
-            .cloned()
+        self.answers.locked().get(&pid).cloned()
     }
 
     /// The one response to `request`.
@@ -81,8 +75,7 @@ impl Ecu {
         let mut bits: u32 = 0;
         for pid in self
             .answers
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .locked()
             .keys()
             .filter(|pid| pid.mode == mode && (1..=32).contains(&pid.pid))
         {
