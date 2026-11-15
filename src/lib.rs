@@ -233,19 +233,22 @@ impl Configured for ObdTransport {
                 meaning: "The CAN identifier an ECU answers from.",
                 applies: Applies::Send,
             },
-            Setting {
-                name: "timeout",
-                kind: Kind::Duration,
-                presence: Presence::Optional,
-                meaning: "How long a peer that stops mid-message is waited on; the ISO-TP \
-                          link's own when left out.",
-                applies: Applies::Both,
-            },
+            transport::configured::timeout(
+                Applies::Both,
+                Some(iso_tp::DEFAULT_TIMEOUT),
+                "How long a peer that stops mid-message is waited on; the ISO-TP \
+                 link's own when left out.",
+            ),
         ],
     };
 
     /// The schemes a Location's address is entered with to choose this technology.
     const SCHEMES: &'static [&'static str] = &["obd"];
+
+    /// The ISO-TP link's: a peer is waited on as the link waits.
+    fn timeout_kept(&mut self) -> Option<&mut dyn transport::configured::TimeoutKept> {
+        self.link.timeout_kept()
+    }
 
     /// On a Location read for both sides, the tester's identifier is the
     /// one transmitted under.
@@ -258,10 +261,6 @@ impl Configured for ObdTransport {
             .map_or(ECU, |id| u32::try_from(id).unwrap_or_default());
         let bus = can_bus::open_bus(address)?;
         let link = IsoTpTransport::new(Arc::clone(&bus), bus, id);
-        let link = match settings.optional_duration("timeout") {
-            Some(timeout) => link.timing_out_after(timeout),
-            None => link,
-        };
         Ok(Self::new(link).at(Pid {
             mode: byte("mode"),
             pid: byte("pid"),
@@ -299,6 +298,12 @@ mod tests {
         ];
         let tester = ObdTransport::open("vcan0", Applies::Receive, &given).expect("built");
         assert_eq!(tester.pid, Pid::current(0x0c));
+        // Left out, the Location waits the default it declares: the ISO-TP
+        // link's own, which the link waits when given none.
+        let declared = ObdTransport::SETTINGS;
+        let unsaid = declared.read(Applies::Receive, &given[..2]).expect("read");
+        let timeout = unsaid.optional_duration(transport::configured::TIMEOUT);
+        assert_eq!(timeout, Some(iso_tp::DEFAULT_TIMEOUT));
         let ecu = ObdTransport::open("vcan0", Applies::Send, &[]).expect("built");
         assert_eq!(ecu.pid, DEFAULT_PID);
         let wrong = [("request_id".to_string(), Given::Integer(0x7df))];
