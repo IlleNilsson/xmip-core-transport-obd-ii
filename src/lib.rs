@@ -253,18 +253,25 @@ impl Configured for ObdTransport {
     /// On a Location read for both sides, the tester's identifier is the
     /// one transmitted under.
     fn configured(address: &str, settings: &Read) -> Result<Self> {
+        Ok(Self::on(can_bus::open_bus(address)?, settings))
+    }
+}
+
+impl ObdTransport {
+    /// The tester or the ECU a Location's settings build on `bus`: the bus
+    /// its address names, or a simulated one a test gives it.
+    pub(crate) fn on(bus: Arc<dyn can_bus::Bus>, settings: &Read) -> Self {
         // The declaration holds every integer within its range.
         let byte = |name| u8::try_from(settings.integer(name)).unwrap_or_default();
         let id = settings
             .optional_integer("request_id")
             .or_else(|| settings.optional_integer("response_id"))
             .map_or(ECU, |id| u32::try_from(id).unwrap_or_default());
-        let bus = can_bus::open_bus(address)?;
         let link = IsoTpTransport::new(Arc::clone(&bus), bus, id);
-        Ok(Self::new(link).at(Pid {
+        Self::new(link).at(Pid {
             mode: byte("mode"),
             pid: byte("pid"),
-        }))
+        })
     }
 }
 
@@ -287,16 +294,23 @@ mod tests {
         (ObdTransport::new(tester), ObdTransport::new(ecu))
     }
 
+    // Built on a simulated bus by its own constructor, never by a name a
+    // build with `socketcan` hands the kernel on Linux (another crate of the
+    // estate's one workspace turns it on).
     #[test]
     fn obd_ii_declares_its_settings_and_reads_through_them() {
         use xcore::settings::Given;
+        let on = |side, given: &[(String, Given)]| {
+            let read = ObdTransport::SETTINGS.read(side, given).expect("read");
+            ObdTransport::on(can_bus::simulated("vcan0"), &read).finished(&read, side)
+        };
         assert_eq!(ObdTransport::SETTINGS.problems(), Vec::<String>::new());
         let given = [
             ("mode".to_string(), Given::Integer(1)),
             ("pid".to_string(), Given::Integer(0x0c)),
             ("timeout".to_string(), Given::Text("250ms".to_string())),
         ];
-        let tester = ObdTransport::open("vcan0", Applies::Receive, &given).expect("built");
+        let tester = on(Applies::Receive, &given);
         assert_eq!(tester.pid, Pid::current(0x0c));
         // Left out, the Location waits the default it declares: the ISO-TP
         // link's own, which the link waits when given none.
@@ -304,7 +318,7 @@ mod tests {
         let unsaid = declared.read(Applies::Receive, &given[..2]).expect("read");
         let timeout = unsaid.optional_duration(transport::configured::TIMEOUT);
         assert_eq!(timeout, Some(iso_tp::DEFAULT_TIMEOUT));
-        let ecu = ObdTransport::open("vcan0", Applies::Send, &[]).expect("built");
+        let ecu = on(Applies::Send, &[]);
         assert_eq!(ecu.pid, DEFAULT_PID);
         let wrong = [("request_id".to_string(), Given::Integer(0x7df))];
         let Err(refused) = ObdTransport::open("vcan0", Applies::Send, &wrong) else {
