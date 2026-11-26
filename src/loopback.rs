@@ -17,7 +17,8 @@ use transport::Configured;
 use transport::error::Result;
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 
-use crate::pid::{ECU, FUNCTIONAL, code};
+use crate::declaration::{ECU, FUNCTIONAL};
+use crate::pid::code;
 use crate::{ObdTransport, Transport};
 
 impl ObdTransport {

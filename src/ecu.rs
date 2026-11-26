@@ -13,7 +13,8 @@ use xcore::lock::Locked;
 
 use transport::error::Result;
 
-use crate::pid::{CURRENT_DATA, Pid, SUPPORTED, VEHICLE_INFORMATION, code};
+use crate::declaration::VEHICLE_INFORMATION;
+use crate::pid::{CURRENT_DATA, Pid, SUPPORTED, code};
 
 /// An ECU: what it answers, by parameter.
 #[derive(Default)]

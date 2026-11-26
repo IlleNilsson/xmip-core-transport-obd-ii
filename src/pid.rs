@@ -13,18 +13,14 @@
 use net::ceiling;
 use transport::error::{Result, protocol_error};
 
+use crate::declaration::VEHICLE_INFORMATION;
+
 /// Mode 01: current data.
 pub const CURRENT_DATA: u8 = 0x01;
-/// Mode 09: vehicle information.
-pub const VEHICLE_INFORMATION: u8 = 0x09;
 /// What a positive response adds to the mode.
 pub const POSITIVE: u8 = 0x40;
 /// The first byte of every negative response.
 pub const NEGATIVE: u8 = 0x7f;
-/// The functional address a tester asks every emissions ECU at.
-pub const FUNCTIONAL: u32 = 0x7df;
-/// Where the first ECU answers from.
-pub const ECU: u32 = 0x7e8;
 /// The parameter in every mode that bitmaps the next thirty-two.
 pub const SUPPORTED: u8 = 0x00;
 

@@ -23,32 +23,57 @@
 //!
 //! The origin URI names the parameter that was polled:
 //! `obd://<bus>/0x<mode>/0x<pid>`.
+//!
+//! **Built with its `declaration` feature alone** the crate is
+//! [`declaration`], what a Location of it is configured with, and none of
+//! the code above, which is behind the default feature: what the surfaces'
+//! library carries (ADR-0064, amendment 2026-11-26).
 
+#[cfg(feature = "declaration")]
+pub mod declaration;
+#[cfg(feature = "default")]
 pub mod ecu;
+#[cfg(feature = "default")]
 pub mod loopback;
+#[cfg(feature = "default")]
 pub mod pid;
 
+#[cfg(feature = "default")]
 use std::sync::Arc;
 
+#[cfg(feature = "default")]
 use can_bus::loopback::Session;
+#[cfg(feature = "default")]
 use codec::hex::prefixed_number;
+#[cfg(feature = "default")]
 use iso_tp::IsoTpTransport;
+#[cfg(feature = "default")]
 use net::{Target, ceiling};
+#[cfg(feature = "default")]
 use transport::error::{Result, protocol_error};
+#[cfg(feature = "default")]
 use transport::standing::Standing;
+#[cfg(feature = "default")]
 use transport::{Acknowledgement, Arrived, Configured, Directions, Taken, Transport};
-use xcore::settings::{Applies, Fixed, Kind, Presence, Read, Setting, Settings};
+#[cfg(feature = "default")]
+use xcore::settings::{Read, Settings};
 
+#[cfg(feature = "declaration")]
+pub use declaration::{ECU, FUNCTIONAL, VEHICLE_INFORMATION};
+#[cfg(feature = "default")]
 pub use ecu::Ecu;
-pub use pid::{CURRENT_DATA, ECU, FUNCTIONAL, Pid, VEHICLE_INFORMATION, code};
+#[cfg(feature = "default")]
+pub use pid::{CURRENT_DATA, Pid, code};
 
 /// The parameter a Location polls or answers unless told otherwise: the
 /// ECU name, information type `0a`, the one vehicle information item a
 /// manufacturer fills freely.
-const DEFAULT_PID: Pid = Pid::information(0x0a);
+#[cfg(feature = "default")]
+const DEFAULT_PID: Pid = Pid::information(declaration::ECU_NAME);
 
 /// One end of a diagnostic exchange: a tester when it receives, an ECU
 /// when it sends.
+#[cfg(feature = "default")]
 #[derive(Clone)]
 pub struct ObdTransport {
     link: IsoTpTransport,
@@ -57,6 +82,7 @@ pub struct ObdTransport {
     standing: Standing<Session>,
 }
 
+#[cfg(feature = "default")]
 impl ObdTransport {
     /// An exchange over `link`, polling and answering [`DEFAULT_PID`] as an
     /// ECU holding nothing.
@@ -136,6 +162,7 @@ impl ObdTransport {
     }
 }
 
+#[cfg(feature = "default")]
 impl Transport for ObdTransport {
     fn name(&self) -> &'static str {
         "obd-ii"
@@ -185,65 +212,10 @@ impl Transport for ObdTransport {
     }
 }
 
-/// A byte of a parameter: its mode or its number.
-const BYTE: Kind = Kind::Integer {
-    minimum: 0,
-    maximum: 255,
-};
-
-/// A CAN identifier, extended above `0x7ff`.
-const CAN_ID: Kind = Kind::Integer {
-    minimum: 0,
-    maximum: 0x1fff_ffff,
-};
-
+#[cfg(feature = "default")]
 impl Configured for ObdTransport {
-    /// The address is the CAN interface, `can0`, the ISO-TP link rides. A
-    /// Receive Location is the tester and transmits at the functional
-    /// address; a Send Location is the ECU and answers from its own.
-    const SETTINGS: &'static Settings = &Settings {
-        technology: env!("CARGO_PKG_NAME"),
-        settings: &[
-            Setting {
-                name: "mode",
-                kind: BYTE,
-                presence: Presence::Default(Fixed::Integer(DEFAULT_PID.mode as i64)),
-                meaning: "The mode of the parameter polled or answered: 1 current data, 9 \
-                          vehicle information.",
-                applies: Applies::Both,
-            },
-            Setting {
-                name: "pid",
-                kind: BYTE,
-                presence: Presence::Default(Fixed::Integer(DEFAULT_PID.pid as i64)),
-                meaning: "The number of the parameter polled or answered within its mode.",
-                applies: Applies::Both,
-            },
-            Setting {
-                name: "request_id",
-                kind: CAN_ID,
-                presence: Presence::Default(Fixed::Integer(FUNCTIONAL as i64)),
-                meaning: "The CAN identifier a tester asks under.",
-                applies: Applies::Receive,
-            },
-            Setting {
-                name: "response_id",
-                kind: CAN_ID,
-                presence: Presence::Default(Fixed::Integer(ECU as i64)),
-                meaning: "The CAN identifier an ECU answers from.",
-                applies: Applies::Send,
-            },
-            transport::configured::timeout(
-                Applies::Both,
-                Some(iso_tp::DEFAULT_TIMEOUT),
-                "How long a peer that stops mid-message is waited on; the ISO-TP \
-                 link's own when left out.",
-            ),
-        ],
-    };
-
-    /// The schemes a Location's address is entered with to choose this technology.
-    const SCHEMES: &'static [&'static str] = &["obd"];
+    const SETTINGS: &'static Settings = declaration::SETTINGS;
+    const SCHEMES: &'static [&'static str] = declaration::SCHEMES;
 
     /// The ISO-TP link's: a peer is waited on as the link waits.
     fn timeout_kept(&mut self) -> Option<&mut dyn transport::configured::TimeoutKept> {
@@ -257,6 +229,7 @@ impl Configured for ObdTransport {
     }
 }
 
+#[cfg(feature = "default")]
 impl ObdTransport {
     /// The tester or the ECU a Location's settings build on `bus`: the bus
     /// its address names, or a simulated one a test gives it.
@@ -279,6 +252,7 @@ impl ObdTransport {
 mod tests {
     use super::*;
     use std::time::Duration;
+    use xcore::settings::Applies;
 
     /// A tester and an ECU, nodes on one simulated bus, on this thread: what the
     /// tester asks sits on the bus until the ECU is asked to answer.
